@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -453,6 +454,16 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing
 	require.Equal(t, "compat_email_match", completion["choice_reason"])
 	_, hasAccessToken := completion["access_token"]
 	require.False(t, hasAccessToken)
+
+	identityCount, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-compat"),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, identityCount)
 }
 
 func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *testing.T) {
@@ -502,14 +513,14 @@ func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *
 	require.Zero(t, count)
 }
 
-func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t *testing.T) {
+func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenEmailIsNotVerified(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-invite",
 		PreferredUsername: "oidc_invite",
 		DisplayName:       "OIDC Invite Display",
 		AvatarURL:         "https://cdn.example/oidc-invite.png",
 		Email:             "oidc-invite@example.com",
-		EmailVerified:     true,
+		EmailVerified:     false,
 	})
 	defer cleanup()
 
@@ -548,6 +559,71 @@ func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t 
 	require.Equal(t, oauthPendingChoiceStep, completion["step"])
 	require.Equal(t, "/dashboard", completion["redirect"])
 	require.Equal(t, "third_party_signup", completion["choice_reason"])
+}
+
+func TestOIDCOAuthCallbackAutoCreatesVerifiedEmailUserAndBypassesInvitation(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-enterprise",
+		PreferredUsername: "oidc_enterprise",
+		DisplayName:       "Enterprise OIDC User",
+		AvatarURL:         "https://cdn.example/oidc-enterprise.png",
+		Email:             "employee@example.com",
+		EmailVerified:     true,
+	})
+	defer cleanup()
+
+	handler, client := newOIDCOAuthHandlerAndClient(t, true, cfg)
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-enterprise", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-enterprise"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-enterprise"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-enterprise"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-enterprise"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	callbackURL, err := url.Parse(location)
+	require.NoError(t, err)
+	require.Equal(t, "/auth/oidc/callback", callbackURL.Path)
+	fragment, err := url.ParseQuery(callbackURL.Fragment)
+	require.NoError(t, err)
+	require.NotEmpty(t, fragment.Get("access_token"))
+	require.NotEmpty(t, fragment.Get("refresh_token"))
+	require.Equal(t, "Bearer", fragment.Get("token_type"))
+	require.Equal(t, "/dashboard", fragment.Get("redirect"))
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+
+	ctx := context.Background()
+	userEntity, err := client.User.Query().
+		Where(dbuser.EmailEQ("employee@example.com")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "oidc_enterprise", userEntity.Username)
+	require.Equal(t, "oidc", userEntity.SignupSource)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-enterprise"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, identity.UserID)
+	require.Equal(t, "employee@example.com", identity.Metadata["email"])
+	require.Equal(t, true, identity.Metadata["email_verified"])
+
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
 }
 
 func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {

@@ -454,6 +454,50 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		}
 	}
 
+	if compatEmailUser == nil && strings.TrimSpace(compatEmail) != "" && emailVerified != nil && *emailVerified {
+		metadata := clonePendingMap(upstreamClaims)
+		metadata["synthetic_email"] = email
+		metadata["email"] = strings.TrimSpace(strings.ToLower(compatEmail))
+		metadata["email_verified"] = true
+		tokenPair, user, err := h.authService.LoginOrRegisterVerifiedOIDCEnterpriseSSO(c.Request.Context(), service.EmailOAuthIdentityInput{
+			ProviderType:     "oidc",
+			ProviderKey:      issuer,
+			ProviderSubject:  subject,
+			Email:            compatEmail,
+			EmailVerified:    true,
+			Username:         username,
+			DisplayName:      pendingSessionStringValue(upstreamClaims, "suggested_display_name"),
+			AvatarURL:        pendingSessionStringValue(upstreamClaims, "suggested_avatar_url"),
+			UpstreamMetadata: metadata,
+		})
+		if err != nil {
+			if errors.Is(err, service.ErrEmailExists) {
+				if matchedUser, matchErr := h.findOIDCCompatEmailUser(c.Request.Context(), compatEmail); matchErr == nil && matchedUser != nil {
+					compatEmailUser = matchedUser
+				} else {
+					redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
+					return
+				}
+			} else {
+				redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
+				return
+			}
+		} else {
+			if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+				redirectOAuthError(c, frontendCallback, "login_blocked", infraerrors.Reason(err), infraerrors.Message(err))
+				return
+			}
+			fragment := url.Values{}
+			fragment.Set("access_token", tokenPair.AccessToken)
+			fragment.Set("refresh_token", tokenPair.RefreshToken)
+			fragment.Set("expires_in", fmt.Sprintf("%d", tokenPair.ExpiresIn))
+			fragment.Set("token_type", "Bearer")
+			fragment.Set("redirect", redirectTo)
+			redirectWithFragment(c, frontendCallback, fragment)
+			return
+		}
+	}
+
 	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
 		if err := h.createOIDCOAuthChoicePendingSession(
 			c,

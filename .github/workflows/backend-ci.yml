@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
 
@@ -67,3 +68,30 @@ jobs:
           version: v2.9
           args: --timeout=30m
           working-directory: backend
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read version
+        id: version
+        run: |
+          VERSION="$(tr -d '\r\n' < backend/cmd/server/VERSION)"
+          if [ -z "$VERSION" ]; then
+            echo "backend/cmd/server/VERSION is empty" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: sub2api:${{ steps.version.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org

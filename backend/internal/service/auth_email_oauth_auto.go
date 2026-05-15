@@ -38,6 +38,103 @@ func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithInvitation(
 	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode)
 }
 
+func (s *AuthService) LoginOrRegisterVerifiedOIDCEnterpriseSSO(ctx context.Context, input EmailOAuthIdentityInput) (*TokenPair, *User, error) {
+	if s == nil || s.userRepo == nil || s.entClient == nil {
+		return nil, nil, ErrServiceUnavailable
+	}
+
+	providerType := normalizeOAuthSignupSource(input.ProviderType)
+	if providerType != "oidc" {
+		return nil, nil, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	}
+	providerKey := strings.TrimSpace(input.ProviderKey)
+	if providerKey == "" {
+		return nil, nil, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	}
+	providerSubject := strings.TrimSpace(input.ProviderSubject)
+	if providerSubject == "" {
+		return nil, nil, infraerrors.BadRequest("OAUTH_SUBJECT_MISSING", "oauth subject is missing")
+	}
+	if !input.EmailVerified {
+		return nil, nil, infraerrors.Forbidden("OAUTH_EMAIL_NOT_VERIFIED", "oauth email is not verified")
+	}
+
+	email := strings.TrimSpace(strings.ToLower(input.Email))
+	if email == "" || len(email) > 255 {
+		return nil, nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		return nil, nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
+	}
+	if isReservedEmail(email) {
+		return nil, nil, ErrEmailReserved
+	}
+	if err := s.validateRegistrationEmailPolicy(ctx, email); err != nil {
+		return nil, nil, err
+	}
+
+	identityUser, err := s.findEmailOAuthIdentityOwner(ctx, providerType, providerKey, providerSubject)
+	if err != nil {
+		return nil, nil, err
+	}
+	if identityUser != nil && !strings.EqualFold(strings.TrimSpace(identityUser.Email), email) {
+		return nil, nil, infraerrors.Conflict("AUTH_IDENTITY_EMAIL_MISMATCH", "oauth identity belongs to a different email")
+	}
+
+	user := identityUser
+	created := false
+	if user == nil {
+		existsEmail, err := s.userRepo.ExistsByEmail(ctx, email)
+		if err != nil {
+			return nil, nil, ErrServiceUnavailable
+		}
+		if existsEmail {
+			return nil, nil, ErrEmailExists
+		}
+		user, err = s.createEmailOAuthUserBypassingInvitation(ctx, email, input.Username, providerType, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		created = true
+	}
+
+	if !user.IsActive() {
+		return nil, nil, ErrUserNotActive
+	}
+	if err := s.ensureEmailOAuthIdentity(ctx, user.ID, EmailOAuthIdentityInput{
+		ProviderType:     providerType,
+		ProviderKey:      providerKey,
+		ProviderSubject:  providerSubject,
+		Email:            email,
+		EmailVerified:    input.EmailVerified,
+		Username:         input.Username,
+		DisplayName:      input.DisplayName,
+		AvatarURL:        input.AvatarURL,
+		UpstreamMetadata: input.UpstreamMetadata,
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	if user.Username == "" && strings.TrimSpace(input.Username) != "" {
+		user.Username = strings.TrimSpace(input.Username)
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after oidc oauth login: %v", err)
+		}
+	}
+	if !created {
+		if err := s.ApplyProviderDefaultSettingsOnFirstBind(ctx, user.ID, providerType); err != nil {
+			logger.LegacyPrintf("service.auth", "[Auth] Failed to apply oidc first bind defaults: %v", err)
+		}
+	}
+	s.RecordSuccessfulLogin(ctx, user.ID)
+
+	tokenPair, err := s.GenerateTokenPair(ctx, user, "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate token pair: %w", err)
+	}
+	return tokenPair, user, nil
+}
+
 func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	ctx context.Context,
 	input EmailOAuthIdentityInput,
@@ -142,15 +239,36 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 }
 
 func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, error) {
+	return s.createEmailOAuthUserWithOptions(ctx, email, username, providerType, invitationCode, affiliateCode, false, true)
+}
+
+func (s *AuthService) createEmailOAuthUserBypassingInvitation(ctx context.Context, email, username, providerType, affiliateCode string) (*User, error) {
+	return s.createEmailOAuthUserWithOptions(ctx, email, username, providerType, "", affiliateCode, true, false)
+}
+
+func (s *AuthService) createEmailOAuthUserWithOptions(
+	ctx context.Context,
+	email string,
+	username string,
+	providerType string,
+	invitationCode string,
+	affiliateCode string,
+	bypassInvitation bool,
+	allowExistingEmailConflict bool,
+) (*User, error) {
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return nil, ErrRegDisabled
 	}
-	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
-	if err != nil {
-		if errors.Is(err, ErrInvitationCodeRequired) {
-			return nil, ErrOAuthInvitationRequired
+	var invitationRedeemCode *RedeemCode
+	if !bypassInvitation {
+		var err error
+		invitationRedeemCode, err = s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+		if err != nil {
+			if errors.Is(err, ErrInvitationCodeRequired) {
+				return nil, ErrOAuthInvitationRequired
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	randomPassword, err := randomHexString(32)
@@ -179,6 +297,9 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 	}
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		if errors.Is(err, ErrEmailExists) {
+			if !allowExistingEmailConflict {
+				return nil, ErrEmailExists
+			}
 			existing, loadErr := s.userRepo.GetByEmail(ctx, email)
 			if loadErr != nil {
 				return nil, ErrServiceUnavailable
