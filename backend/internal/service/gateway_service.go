@@ -9544,18 +9544,21 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 	}
 
 	// 如果 path 指向一个已存在的目录，自动追加默认文件名
+	// #nosec G703 -- SUB2API_DEBUG_GATEWAY_BODY is an operator-controlled local debug path.
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
 	}
 
 	// 确保父目录存在
 	if dir := filepath.Dir(path); dir != "." {
+		// #nosec G703 -- SUB2API_DEBUG_GATEWAY_BODY is an operator-controlled local debug path.
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
 			return
 		}
 	}
 
+	// #nosec G703 -- SUB2API_DEBUG_GATEWAY_BODY is an operator-controlled local debug path.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
