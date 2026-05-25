@@ -38,7 +38,7 @@ func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithInvitation(
 	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode)
 }
 
-func (s *AuthService) LoginOrRegisterVerifiedOIDCEnterpriseSSO(ctx context.Context, input EmailOAuthIdentityInput) (*TokenPair, *User, error) {
+func (s *AuthService) LoginOrRegisterOIDCEnterpriseSSO(ctx context.Context, input EmailOAuthIdentityInput) (*TokenPair, *User, error) {
 	if s == nil || s.userRepo == nil || s.entClient == nil {
 		return nil, nil, ErrServiceUnavailable
 	}
@@ -55,10 +55,6 @@ func (s *AuthService) LoginOrRegisterVerifiedOIDCEnterpriseSSO(ctx context.Conte
 	if providerSubject == "" {
 		return nil, nil, infraerrors.BadRequest("OAUTH_SUBJECT_MISSING", "oauth subject is missing")
 	}
-	if !input.EmailVerified {
-		return nil, nil, infraerrors.Forbidden("OAUTH_EMAIL_NOT_VERIFIED", "oauth email is not verified")
-	}
-
 	email := strings.TrimSpace(strings.ToLower(input.Email))
 	if email == "" || len(email) > 255 {
 		return nil, nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
@@ -68,9 +64,6 @@ func (s *AuthService) LoginOrRegisterVerifiedOIDCEnterpriseSSO(ctx context.Conte
 	}
 	if isReservedEmail(email) {
 		return nil, nil, ErrEmailReserved
-	}
-	if err := s.validateRegistrationEmailPolicy(ctx, email); err != nil {
-		return nil, nil, err
 	}
 
 	identityUser, err := s.findEmailOAuthIdentityOwner(ctx, providerType, providerKey, providerSubject)
@@ -146,7 +139,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	}
 
 	providerType := normalizeOAuthSignupSource(input.ProviderType)
-	if providerType != "github" && providerType != "google" {
+	if providerType != "github" && providerType != "google" && providerType != "oidc" {
 		return nil, nil, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
 	}
 	providerKey := strings.TrimSpace(input.ProviderKey)
