@@ -596,6 +596,27 @@ If you disable URL validation or response header filtering, harden your network 
 - Enforce TLS-only outbound traffic
 - Strip sensitive upstream response headers at the proxy
 
+#### OpenAI Responses WebSocket ingress limits
+
+`gateway.openai_ws` bounds the lifetime and aggregate count of client-facing
+Responses WebSocket sessions. These safeguards apply independently from
+per-turn user and account concurrency slots, which are released between turns.
+
+```yaml
+gateway:
+  openai_ws:
+    # Close a client socket idle between completed turns; 0 disables this safeguard.
+    ingress_inter_turn_idle_timeout_seconds: 300
+    # Distributed API-key limit for live client ingress sessions; 0 disables it.
+    max_ingress_connections_per_api_key: 64
+```
+
+The connection cap is coordinated through Redis using a 60-second lease that
+is refreshed every 20 seconds. A process that cannot confirm a lease for a
+full lease lifetime closes its local WebSocket rather than continuing outside
+the global cap. Use `http_bridge` for client-WebSocket/upstream-HTTP operation
+when rolling out or mitigating upstream WebSocket issues.
+
 #### ⚠️ Important: Creating the Admin Account
 
 The initial admin account is **only created via the setup wizard** (served at `http://<host>:8080` on first run). The `default.admin_email` / `default.admin_password` fields in `config.yaml` are **not used** to create it — they exist in the template for historical reasons.
@@ -667,7 +688,7 @@ Sub2API supports both Grok subscription accounts through xAI OAuth and standard 
 - Public Chat Completions targets: `/v1/chat/completions` and `/chat/completions`, forwarded to the account-type-specific xAI upstream
 - Codex CLI style Responses WebSocket ingress is accepted on the Responses targets and bridged to xAI HTTP/SSE Responses upstream
 - Text models: `grok-4.5`, `grok-4.3`, `grok-build-0.1`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, and `grok-4.20-multi-agent-0309`
-- Media targets for Grok groups: `/v1/images/generations`, `/images/generations`, `/v1/images/edits`, `/images/edits`, `/v1/videos/generations`, `/videos/generations`, `/v1/videos/{request_id}`, and `/videos/{request_id}`. Generation requests require the group image-generation permission.
+- Media targets for Grok groups: `/v1/images/generations`, `/images/generations`, `/v1/images/edits`, `/images/edits`, `/v1/videos/generations`, `/videos/generations`, `/v1/videos/edits`, `/videos/edits`, `/v1/videos/extensions`, `/videos/extensions`, `/v1/videos/{request_id}`, and `/videos/{request_id}`. Generation, editing, and extension requests require the group image-generation permission.
 - Media models: `grok-imagine`, `grok-imagine-image-quality`, `grok-imagine-image`, `grok-imagine-edit`, `grok-imagine-video`, and `grok-imagine-video-1.5`
 - Out of scope for this provider: TTS, transcription, browser automation, cookies, and Grok web scraping
 
