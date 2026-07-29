@@ -120,7 +120,7 @@ func (s *AuthService) LoginOrRegisterOIDCEnterpriseSSO(ctx context.Context, inpu
 
 	if user.Username == "" && strings.TrimSpace(input.Username) != "" {
 		user.Username = strings.TrimSpace(input.Username)
-		if err := s.userRepo.Update(ctx, user); err != nil {
+		if err := s.userRepo.Update(ctx, user, UserUpdateFields{Username: true}); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after oidc oauth login: %v", err)
 		}
 	}
@@ -226,7 +226,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 
 	if user.Username == "" && strings.TrimSpace(input.Username) != "" {
 		user.Username = strings.TrimSpace(input.Username)
-		if err := s.userRepo.Update(ctx, user); err != nil {
+		if err := s.userRepo.Update(ctx, user, UserUpdateFields{Username: true}); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after %s oauth login: %v", providerType, err)
 		}
 	}
