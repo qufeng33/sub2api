@@ -575,7 +575,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, c, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai messages buffered", requestID)
 	if err != nil {
 		var readErr *openAICompatBufferedReadError
 		if errors.As(err, &readErr) && readErr != nil {
@@ -745,6 +745,7 @@ func openAICompatTerminalResponse(event *apicompat.ResponsesStreamEvent, payload
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	logPrefix string,
 	requestID string,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
@@ -824,6 +825,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			if !ok {
 				if frame, ok := parser.Finish(); ok {
 					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+					payload = string(s.repriceOpenAIReasoningBody(account, []byte(payload)))
 					payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
@@ -864,6 +866,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				continue
 			}
 			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+			payload = string(s.repriceOpenAIReasoningBody(account, []byte(payload)))
 			payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 
 			var event apicompat.ResponsesStreamEvent
@@ -980,6 +983,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// processDataLine handles a single "data: ..." SSE line from upstream.
 	processDataLine := func(payload string) bool {
+		payload = string(s.repriceOpenAIReasoningBody(account, []byte(payload)))
 		payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 		if firstChunk {
 			firstChunk = false

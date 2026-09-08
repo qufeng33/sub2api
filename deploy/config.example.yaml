@@ -310,6 +310,10 @@ gateway:
   # Use this to avoid compact failures when newer models are not yet supported by the compact endpoint.
   # 当 compact 端点暂未支持更新模型时，可通过这里降级规避失败。
   openai_compact_model: "gpt-5.4"
+  # OpenAI 推理用量乘此系数后向上取整：1 不调整，0 免费，0.8 折扣，1.5 加价。
+  # 响应、账单、账号成本统计和账号额度均使用折算量，其他平台不受影响。
+  # 环境变量：GATEWAY_OPENAI_REASONING_BILLING_MULTIPLIER；修改后需重启。
+  openai_reasoning_billing_multiplier: 1
   # ChatGPT Frameless Live 单会话硬上限（秒）。
   live:
     max_session_duration_seconds: 3600

@@ -74,8 +74,9 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 				"id":    "resp_new_1",
 				"model": "gpt-5.1",
 				"usage": map[string]any{
-					"input_tokens":  12,
-					"output_tokens": 7,
+					"input_tokens":          12,
+					"output_tokens":         7,
+					"output_tokens_details": map[string]any{"reasoning_tokens": 3},
 					"input_tokens_details": map[string]any{
 						"cached_tokens": 3,
 					},
@@ -108,6 +109,8 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 30
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 10
 	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 3600
+	reasoningBillingMultiplier := 1.5
+	cfg.Gateway.OpenAIReasoningBillingMultiplier = &reasoningBillingMultiplier
 
 	upstream := &httpUpstreamRecorder{
 		resp: &http.Response{
@@ -148,7 +151,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
-	require.Equal(t, 7, result.Usage.OutputTokens)
+	require.Equal(t, 9, result.Usage.OutputTokens)
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 	require.Equal(t, "resp_new_1", result.RequestID)
 	require.True(t, result.OpenAIWSMode)
@@ -170,6 +173,8 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 
 	responseBody := rec.Body.Bytes()
 	require.Equal(t, "resp_new_1", gjson.GetBytes(responseBody, "id").String())
+	require.Equal(t, int64(9), gjson.GetBytes(responseBody, "usage.output_tokens").Int())
+	require.Equal(t, int64(5), gjson.GetBytes(responseBody, "usage.output_tokens_details.reasoning_tokens").Int())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_UsesPatchedBodyAfterValidationDecode(t *testing.T) {

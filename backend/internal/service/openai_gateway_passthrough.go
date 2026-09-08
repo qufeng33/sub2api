@@ -1983,6 +1983,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for documentScanner.Scan() {
 		line := documentScanner.Text()
+		line = s.repriceOpenAIReasoningSSELine(account, line)
 		if eventType, ok := extractOpenAISSEEventLine(line); ok {
 			pendingSSEEventType = eventType
 			eventType = strings.TrimSpace(eventType)
@@ -2267,6 +2268,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, err
 	}
+	body = s.repriceOpenAIReasoningBody(account, body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)

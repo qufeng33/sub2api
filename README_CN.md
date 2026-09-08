@@ -696,6 +696,10 @@ go generate ./cmd/server
 
 ---
 
+## OpenAI 推理计费
+
+通过 `GATEWAY_OPENAI_REASONING_BILLING_MULTIPLIER` 折算 OpenAI 推理用量，默认 `1`，乘积向上取整。响应、账单、账号成本统计和账号额度均使用折算量，不保留折算前用量；用户/分组收费倍率继续生效。配置和计费规则见 [OpenAI 推理计费系数](docs/OPENAI_REASONING_BILLING.md)。
+
 ## 简易模式
 
 简易模式适合个人开发者或内部团队快速使用，不依赖完整 SaaS 功能。

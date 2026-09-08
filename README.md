@@ -734,6 +734,10 @@ Long-running OpenAI/Grok image generation and editing can be submitted through `
 
 ---
 
+## OpenAI Reasoning Billing
+
+`GATEWAY_OPENAI_REASONING_BILLING_MULTIPLIER` scales OpenAI reasoning tokens, rounding up to an integer. It defaults to `1`. Responses, billing, account cost statistics, and account quotas use the scaled usage without retaining the original counts. User/group rates still apply. See [configuration and billing rules](docs/OPENAI_REASONING_BILLING.md).
+
 ## Grok / xAI Support
 
 Sub2API supports both Grok subscription accounts through xAI OAuth and standard xAI API-key accounts. Both account types forward OpenAI-compatible Responses traffic to xAI.

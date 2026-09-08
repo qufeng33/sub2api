@@ -96,6 +96,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
+	reasoningMultiplier := 1.5
+	cfg.Gateway.OpenAIReasoningBillingMultiplier = &reasoningMultiplier
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -113,7 +115,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
 			[]byte(`{"type":"response.output_item.done","item":{"id":"ig_ingress_1","type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
@@ -148,10 +150,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 
 	serverErrCh := make(chan error, 1)
 	turnTerminalCh := make(chan string, 2)
+	turnUsageCh := make(chan int, 2)
 	hooks := &OpenAIWSIngressHooks{
 		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
 			if turnErr == nil && result != nil {
 				turnTerminalCh <- result.UpstreamTerminalEvent
+				turnUsageCh <- result.Usage.OutputTokens
 			}
 		},
 	}
@@ -220,13 +224,19 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	firstTurnEvent := readMessage()
 	require.Equal(t, "response.completed", gjson.GetBytes(firstTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_1", gjson.GetBytes(firstTurnEvent, "response.id").String())
+	require.Equal(t, int64(2), gjson.GetBytes(firstTurnEvent, "response.usage.output_tokens").Int())
+	require.Equal(t, int64(2), gjson.GetBytes(firstTurnEvent, "response.usage.output_tokens_details.reasoning_tokens").Int())
+	require.Equal(t, int64(3), gjson.GetBytes(firstTurnEvent, "response.usage.total_tokens").Int())
 
 	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_ingress_turn_1"}`)
 	secondTurnEvent := readMessage()
 	require.Equal(t, "response.completed", gjson.GetBytes(secondTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_2", gjson.GetBytes(secondTurnEvent, "response.id").String())
+	require.Equal(t, int64(1), gjson.GetBytes(secondTurnEvent, "response.usage.output_tokens").Int())
 	require.Equal(t, "response.completed", <-turnTerminalCh, "首轮 turn 应保留成功终态")
 	require.Equal(t, "response.completed", <-turnTerminalCh, "第二轮 turn 应保留成功终态")
+	require.Equal(t, 2, <-turnUsageCh)
+	require.Equal(t, 1, <-turnUsageCh)
 
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 

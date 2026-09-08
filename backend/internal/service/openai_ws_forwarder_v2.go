@@ -524,6 +524,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
 			return nil, fmt.Errorf("openai ws read event: %w", readErr)
 		}
+		message = s.repriceOpenAIReasoningBody(account, message)
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
 		}
